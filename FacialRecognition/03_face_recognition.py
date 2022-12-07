@@ -13,6 +13,15 @@ import numpy as np
 import os 
 import datetime
 import openpyxl
+import pyrealsense2 as rs
+from PIL import Image
+
+WIDTH = 640
+HEIGHT = 480
+THRESHOLD = 0.7
+SCREEN = 1.7
+TARGET = 0.1
+
 
 recognizer = cv2.face.LBPHFaceRecognizer_create()
 recognizer.read('trainer/trainer.yml')
@@ -28,65 +37,151 @@ id = 0
 names = ['Kento', 'Daiki', 'mask', 'Ilza', 'Z', 'W'] 
 
 # Initialize and start realtime video capture
-cam = cv2.VideoCapture(0)
-cam.set(3, 640) # set video widht
-cam.set(4, 480) # set video height
+# color format
+# データ形式の話
+color_stream, color_format = rs.stream.color, rs.format.bgr8
+depth_stream, depth_format = rs.stream.depth, rs.format.z16
+
+# ストリーミング初期化
+# RealSenseからデータを受信するための準備
+# config.enable_streamでRGB，Dの解像度とデータ形式，フレームレートを指定している
+config = rs.config()
+config.enable_stream(depth_stream, WIDTH, HEIGHT, depth_format, 30)
+config.enable_stream(color_stream, WIDTH, HEIGHT, color_format, 30)
+
+# ストリーミング開始
+pipeline = rs.pipeline()
+profile = pipeline.start(config)
+
+# 1距離[m] = depth * depth_scale
+depth_sensor = profile.get_device().first_depth_sensor()
+depth_scale = depth_sensor.get_depth_scale()
+# clipping_distance_in_meters = 0.4 # 40cm以内を検出
+# depth値にする
+
+# Alignオブジェクト生成
+# RGBとDの画角の違いによるズレを修正している
+align_to = rs.stream.color
+align = rs.align(align_to)
+# 検出とプリントするための閾値
+# threshold = (WIDTH * HEIGHT * 3) * 0.9
+max_dist = THRESHOLD / depth_scale
+
+
+# cam = cv2.VideoCapture(0)
+# cam.set(3, 640) # set video widht
+# cam.set(4, 480) # set video height
 
 # Define min window size to be recognized as a face
-minW = 0.1*cam.get(3)
-minH = 0.1*cam.get(4)
+# minW = 0.1*cam.get(3)
+# minH = 0.1*cam.get(4)
 
 dt_now = datetime.datetime.now()
 
-wb = openpyxl.load_workbook('/home/kentomi/Documents/fr/fr1.xlsx')
+wb = openpyxl.load_workbook('./fr/fr1.xlsx')
 ws = wb['Sheet1']
 i = 1
-while True:
+try:
+    while True:
 
-    ret, img =cam.read()
-    # img = cv2.flip(img, -1) # Flip vertically
+        # ret, img =cam.read()
 
-    gray = cv2.cvtColor(img,cv2.COLOR_BGR2GRAY)
+        #-------------------realsenseの準備------------------------------
+        # フレーム待ち（color&depth）
+        # フレーム取得
+        frames = pipeline.wait_for_frames()
+        # フレームの画角差を修正
+        aligned_frames = align.process(frames)
+        # フレームの切り分け
+        # 多分これに射影変換行列をかけたら視点の変更ができる
+        color_frame = aligned_frames.get_color_frame()
+        depth_frame = aligned_frames.get_depth_frame()
+        if not depth_frame or not color_frame:
+            continue
 
-    faces = faceCascade.detectMultiScale( 
-        gray,
-        scaleFactor = 1.2,
-        minNeighbors = 5,
-        minSize = (int(minW), int(minH)),
-       )
 
-    for(x,y,w,h) in faces:
 
-        cv2.rectangle(img, (x,y), (x+w,y+h), (0,255,0), 2)
+        # dist = depth_frame.get_distance(x, y)
 
-        id, confidence = recognizer.predict(gray[y:y+h,x:x+w])
-
-        # Check if confidence is less them 100 ==> "0" is perfect match 
-        if (confidence < 100):
-            id = names[id]
-            confidence = "  {0}%".format(round(100 - confidence))
-        else:
-            id = "unknown"
-            confidence = "  {0}%".format(round(100 - confidence))
+        # RGB画像のフレームから画素値をnumpy配列に変換
+        # これで普通のRGB画像になる
+        color_image = np.asanyarray(color_frame.get_data())
         
-        cv2.putText(img, str(id), (x+5,y-5), font, 1, (255,255,255), 2)
-        cv2.putText(img, str(confidence), (x+5,y+h-5), font, 1, (255,255,0), 1)  
-        
-        # print(dt_now)
-        ws.cell(i,1,value = dt_now)
-        ws.cell(i,2,value = id)
-        wb.save('/home/kentomi/Documents/fr/fr1.xlsx')
-        i = i + 1
-        
-        
-        
-    cv2.imshow('camera',img) 
 
-    k = cv2.waitKey(10) & 0xff # Press 'ESC' for exiting video
-    if k == 27:
-        break
+        # D画像のフレームから画素値をnumpy配列に変換
+        depth_image = np.asanyarray(depth_frame.get_data()) # 深度の画素値が入っている
+
+        # スクリーンの距離を取得するために3点取得
+
+
+
+        # 指定距離以下を無視した深度画像の生成
+        # 最大値より遠いものには情報を付与する的な？
+        depth_filterd_image = (depth_image < max_dist) * depth_image
+        depth_gray_filterd_image = (depth_filterd_image * 255. /max_dist).reshape((HEIGHT, WIDTH)).astype(np.uint8)
+
+        # 指定距離以下を無視したRGB画像の生成
+        color_filterd_image = (depth_filterd_image.reshape((HEIGHT, WIDTH, 1)) > 0) * color_image
+
+        # # coverage = [0]*64
+        # for y in range(HEIGHT):
+        #     for x in range(WIDTH):
+        #         dist = depth_frame.get_distance(x, y)
+        #         if THRESHOLD < dist and dist < SCREEN - TARGET + 0.05: # 閾値以上スクリーン以下であれば
+        #         # リストにその座標を格納するかその画素を消してしまうか
+        #             color_filterd_image[y, x] = [0, 255, 0]
+        #         #     coverage[x//10] += 1
+        img = color_filterd_image
+
+
+
+        # img = cv2.flip(img, -1) # Flip vertically
+
+        gray = cv2.cvtColor(img,cv2.COLOR_BGR2GRAY)
+
+        faces = faceCascade.detectMultiScale( 
+            gray,
+            scaleFactor = 1.2,
+            minNeighbors = 5,
+            # minSize = (int(minW), int(minH)),
+            minSize = (0, 0),
+        )
+
+        for(x,y,w,h) in faces:
+
+            cv2.rectangle(img, (x,y), (x+w,y+h), (0,255,0), 2)
+
+            id, confidence = recognizer.predict(gray[y:y+h,x:x+w])
+
+            # Check if confidence is less them 100 ==> "0" is perfect match 
+            if (confidence < 100):
+                id = names[id]
+                confidence = "  {0}%".format(round(100 - confidence))
+            else:
+                id = "unknown"
+                confidence = "  {0}%".format(round(100 - confidence))
+            
+            cv2.putText(img, str(id), (x+5,y-5), font, 1, (255,255,255), 2)
+            cv2.putText(img, str(confidence), (x+5,y+h-5), font, 1, (255,255,0), 1)  
+            
+            # print(dt_now)
+            ws.cell(i,1,value = dt_now)
+            ws.cell(i,2,value = id)
+            wb.save('./fr/fr1.xlsx')
+            i = i + 1
+            
+            
+            
+        cv2.imshow('camera',img) 
+
+        k = cv2.waitKey(10) & 0xff # Press 'ESC' for exiting video
+        if k == 27:
+            break
+finally:
+    pipeline.stop()
+    cv2.destroyAllWindows()
 
 # Do a bit of cleanup
-print("\n [INFO] Exiting Program and cleanup stuff")
-cam.release()
-cv2.destroyAllWindows()
+# print("\n [INFO] Exiting Program and cleanup stuff")
+
+

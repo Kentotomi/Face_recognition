@@ -38,7 +38,7 @@ minH = 0.1*cam.get(4)
 
 dt_now = datetime.datetime.now()
 
-wb = openpyxl.load_workbook('/home/kentomi/Documents/fr/fr1.xlsx')
+wb = openpyxl.load_workbook('./fr/fr1.xlsx')
 ws = wb['Sheet1']
 i = 1
 while True:
@@ -75,7 +75,7 @@ while True:
         # print(dt_now)
         ws.cell(i,1,value = dt_now)
         ws.cell(i,2,value = id)
-        wb.save('/home/kentomi/Documents/fr/fr1.xlsx')
+        wb.save('./fr/fr1.xlsx')
         i = i + 1
         
         

@@ -21,6 +21,7 @@ HEIGHT = 480
 THRESHOLD = 0.7
 SCREEN = 1.7
 TARGET = 0.1
+list_confidence = [0, 1, 2, 3, 4]
 
 
 recognizer = cv2.face.LBPHFaceRecognizer_create()
@@ -80,7 +81,7 @@ dt_now = datetime.datetime.now()
 
 wb = openpyxl.load_workbook('./fr/fr1.xlsx')
 ws = wb['Sheet1']
-i = 1
+i = 0
 try:
     while True:
 
@@ -153,6 +154,8 @@ try:
 
             id, confidence = recognizer.predict(gray[y:y+h,x:x+w])
 
+
+
             # Check if confidence is less them 100 ==> "0" is perfect match 
             if (confidence < 100):
                 id = names[id]
@@ -161,13 +164,25 @@ try:
                 id = "unknown"
                 confidence = "  {0}%".format(round(100 - confidence))
             
+            
+            # yes no 判定処理
+            confidence_int = int(confidence[-3:-1])
+            if confidence_int < 60:
+                confidence_int = 0
+            list_confidence[i%5] = confidence_int
+
+            if all(list_confidence):
+                print("yes")
+
             cv2.putText(img, str(id), (x+5,y-5), font, 1, (255,255,255), 2)
-            cv2.putText(img, str(confidence), (x+5,y+h-5), font, 1, (255,255,0), 1)  
+            cv2.putText(img, str(confidence), (x+5,y+h-5), font, 1, (255,255,0), 1)
+            
             
             # print(dt_now)
-            ws.cell(i,1,value = dt_now)
-            ws.cell(i,2,value = id)
-            wb.save('./fr/fr1.xlsx')
+            # -----------excel-----------------
+            # ws.cell(i,1,value = dt_now)
+            # ws.cell(i,2,value = id)
+            # wb.save('./fr/fr1.xlsx')
             i = i + 1
             
             
